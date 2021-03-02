@@ -23,8 +23,15 @@
 #include <yarp/os/Time.h>
 #include <yarp/os/LogStream.h>
 #include <yarp/os/Semaphore.h>
-#include <yarp/sig/Image.h>
 #include <yarp/os/RpcClient.h>
+
+#include <yarp/sig/Image.h>
+
+#include <yarp/dev/PolyDriver.h>
+#include <yarp/dev/CartesianControl.h>
+#include <yarp/dev/GazeControl.h>
+
+#include <yarp/math/Math.h>
 
 #include <sstream>
 #include <string>
@@ -40,6 +47,11 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     yarp::os::BufferedPort<yarp::os::Bottle > trackerInPort;
 
     yarp::os::RpcClient rpcClient;
+
+    yarp::dev::PolyDriver *drvLeftArm;
+    yarp::dev::PolyDriver *drvGaze;
+    yarp::dev::ICartesianControl *icart;
+    yarp::dev::IGazeControl *igaze;
 
     std::mutex mtx;
 
@@ -65,6 +77,40 @@ public:
         BufferedPort<yarp::os::Bottle >::open( "/" + moduleName + "/handSkin:i" );
         trackerInPort.open("/" + moduleName + "/tracker:i");
 
+        yarp::os::Property optLeftArm("(device cartesiancontrollerclient)");
+        optLeftArm.put("remote", "/icub/cartesianController/left_arm");
+        optLeftArm.put("local", "/" + moduleName + "/left_arm");
+        drvLeftArm=new yarp::dev::PolyDriver;
+        if (!drvLeftArm->open(optLeftArm))
+        {
+            yError() << "Could not open left arm";
+            close();
+            return false;
+        }
+
+        yarp::os::Property optGazeCtrl("(device gazecontrollerclient)");
+        optGazeCtrl.put("remote", "/iKinGazeCtrl");
+        optGazeCtrl.put("local", "/" + moduleName + "/gaze");
+        drvGaze=new yarp::dev::PolyDriver;
+        if (!drvGaze->open(optGazeCtrl))
+        {
+            yError() << "Could not open gaze";
+            close();
+            return false;
+        }
+
+        if (drvLeftArm->isValid() && drvGaze->isValid())
+        {
+            drvLeftArm->view(icart);
+            drvGaze->view(igaze);
+        }
+        else
+        {
+            yError() << "Could not open arm / gaze interface";
+            close();
+            return false;
+        }
+
         return true;
     }
 
@@ -73,6 +119,11 @@ public:
     {
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
+
+        delete drvLeftArm;
+        delete drvGaze;
+        delete icart;
+        delete igaze;
     }
 
     /********************************************************/
@@ -93,7 +144,7 @@ public:
                 yarp::os::Bottle *bodyPart = subSkin->get(0).asList();
                 if (bodyPart->get(1).asInt() == 3 && bodyPart->get(2).asInt() == 6 && bodyPart->get(3).asInt() == 1)
                 {
-                    yInfo() << "Detected left hand";
+//                    yInfo() << "Detected left hand";
                     double avgPressure = subSkin->get(7).asDouble();
                     if (avgPressure >= 20.0)
                     {
@@ -107,15 +158,45 @@ public:
                                 countActive++;
                             }
                         }
-                        yInfo() << "Found" << countActive << "palm active taxels";
-                    }
+//                        yInfo() << "Found" << countActive << "palm active taxels";
 
+                        int countActive = 4;
+                        if (countActive >= 3)
+                        {
+                            yarp::os::Bottle *ballPos = trackerInPort.read();
+                            if (ballPos->size() > 0)
+                            {
+                                if (ballPos->get(3).asDouble() > 0.0005)
+                                {
+                                    yarp::sig::Vector xEye, oEye;
+                                    igaze->getLeftEyePose(xEye, oEye);
+                                    yarp::sig::Matrix eye2root = yarp::math::axis2dcm(oEye);
+                                    eye2root.setSubcol(xEye, 0, 3);
+
+                                    yarp::sig::Vector posBallEye(4);
+                                    posBallEye[0] = ballPos->get(0).asDouble();
+                                    posBallEye[1] = ballPos->get(1).asDouble();
+                                    posBallEye[2] = ballPos->get(2).asDouble();
+                                    posBallEye[3] = 1.0;
+
+                                    yarp::sig::Vector posBallRoot = eye2root * posBallEye;
+                                    posBallRoot.pop_back();
+                                    yDebug() << "Ball pos root" << posBallRoot.toString();
+
+                                    yarp::sig::Vector xHand;
+                                    yarp::sig::Vector oHand;
+                                    icart->getPose(xHand, oHand);
+                                    yDebug() << "Hand Effector" << xHand.toString();
+
+                                    yarp::sig::Vector offset = posBallRoot - xHand;
+                                    yDebug() << "Offset" << offset.toString();
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
-
-//        yarp::os::Bottle *ballPos = trackerInPort.read();
-
     }
 };
 
