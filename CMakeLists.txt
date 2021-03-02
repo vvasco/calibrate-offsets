@@ -2,7 +2,7 @@
 # All Rights Reserved.
 # Authors: Valentina Vasco <valentina.vasco@iit.it>
 
-project(calibrate-offsets)
+project(calib-red-ball)
 
 find_package(YARP REQUIRED COMPONENTS os sig dev math)
 find_package(ICUB REQUIRED)
@@ -15,10 +15,8 @@ include(ICUBcontribHelpers)
 
 icubcontrib_set_default_prefix()
 
-add_executable(${PROJECT_NAME} src/main.cpp ${doc_files})
-target_include_directories(${PROJECT_NAME} PRIVATE ${PROJECT_SOURCE_DIR}/src)
-target_compile_definitions(${PROJECT_NAME} PRIVATE _USE_MATH_DEFINES)
-target_link_libraries(${PROJECT_NAME} ${YARP_LIBRARIES} ctrlLib)
-install(TARGETS ${PROJECT_NAME} DESTINATION bin)
+add_subdirectory(modules)
 
-add_subdirectory(app)
+# generate ad-hoc project to perform "make uninstall"
+icubcontrib_add_uninstall_target()
+

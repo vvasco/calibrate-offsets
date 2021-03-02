@@ -1,0 +1,512 @@
+/*
+ * Copyright (C) 2021 iCub Facility - Istituto Italiano di Tecnologia
+ * Author: Vadim Tikhanoff
+ * email:  vadim.tikhanoff@iit.it
+ * Permission is granted to copy, distribute, and/or modify this program
+ * under the terms of the GNU General Public License, version 2 or any
+ * later version published by the Free Software Foundation.
+ *
+ * A copy of the license can be found at
+ * http://www.robotcub.org/icub/license/gpl.txt
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General
+ * Public License for more details
+ */
+
+#include <yarp/os/BufferedPort.h>
+#include <yarp/os/ResourceFinder.h>
+#include <yarp/os/RFModule.h>
+#include <yarp/os/Network.h>
+#include <yarp/os/Log.h>
+#include <yarp/os/Time.h>
+#include <yarp/os/LogStream.h>
+#include <yarp/os/Semaphore.h>
+#include <yarp/os/RpcClient.h>
+
+#include <yarp/sig/Image.h>
+
+#include <yarp/dev/PolyDriver.h>
+#include <yarp/dev/CartesianControl.h>
+#include <yarp/dev/GazeControl.h>
+#include <yarp/dev/IControlMode.h>
+#include <yarp/dev/IPositionControl.h>
+
+#include <yarp/math/Math.h>
+
+#include <sstream>
+#include <string>
+#include <fstream>
+
+#include "calibOffsets_IDL.h"
+
+/********************************************************/
+class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
+{
+    std::string moduleName;
+    std::string robotName;
+    yarp::sig::Vector calibLeft, calibRight;
+    yarp::sig::Vector homePos, homeVels;
+
+    yarp::os::BufferedPort<yarp::os::Bottle > trackerInPort;
+
+    yarp::dev::PolyDriver *drvCartLeftArm;
+    yarp::dev::PolyDriver *drvCartRightArm;
+    yarp::dev::PolyDriver *drvLeftArm;
+    yarp::dev::PolyDriver *drvRightArm;
+    yarp::dev::PolyDriver *drvGaze;
+    yarp::dev::IPositionControl *iposLeft;
+    yarp::dev::IControlMode *imodeLeft;
+    yarp::dev::IPositionControl *iposRight;
+    yarp::dev::IControlMode *imodeRight;
+    yarp::dev::ICartesianControl *icartLeft;
+    yarp::dev::ICartesianControl *icartRight;
+    yarp::dev::IGazeControl *igaze;
+
+    std::mutex mtx;
+
+public:
+    /********************************************************/
+
+    Processing( const std::string &moduleName, const std::string &robotName,
+                yarp::os::Bottle *cl, yarp::os::Bottle *cr,
+                yarp::os::Bottle *homep, yarp::os::Bottle *homev)
+    {
+        this->moduleName = moduleName;
+        this->robotName = robotName;
+
+        if (cl->size() > 0)
+        {
+            calibLeft.resize(7);
+            calibLeft[0] = cl->get(0).asDouble();
+            calibLeft[1] = cl->get(1).asDouble();
+            calibLeft[2] = cl->get(2).asDouble();
+            calibLeft[3] = cl->get(3).asDouble();
+            calibLeft[4] = cl->get(4).asDouble();
+            calibLeft[5] = cl->get(5).asDouble();
+            calibLeft[6] = cl->get(6).asDouble();
+        }
+
+        if (cr->size() > 0)
+        {
+            calibRight.resize(7);
+            calibRight[0] = cr->get(0).asDouble();
+            calibRight[1] = cr->get(1).asDouble();
+            calibRight[2] = cr->get(2).asDouble();
+            calibRight[3] = cr->get(3).asDouble();
+            calibRight[4] = cr->get(4).asDouble();
+            calibRight[5] = cr->get(5).asDouble();
+            calibRight[6] = cr->get(6).asDouble();
+        }
+
+        if (homep->size() > 0)
+        {
+            homePos.resize(7);
+            homePos[0] = homep->get(0).asDouble();
+            homePos[1] = homep->get(1).asDouble();
+            homePos[2] = homep->get(2).asDouble();
+            homePos[3] = homep->get(3).asDouble();
+            homePos[4] = homep->get(4).asDouble();
+            homePos[5] = homep->get(5).asDouble();
+            homePos[6] = homep->get(6).asDouble();
+        }
+
+        if (homev->size() > 0)
+        {
+            homeVels.resize(7);
+            homeVels[0] = homev->get(0).asDouble();
+            homeVels[1] = homev->get(1).asDouble();
+            homeVels[2] = homev->get(2).asDouble();
+            homeVels[3] = homev->get(3).asDouble();
+            homeVels[4] = homev->get(4).asDouble();
+            homeVels[5] = homev->get(5).asDouble();
+            homeVels[6] = homev->get(6).asDouble();
+        }
+    }
+
+    /********************************************************/
+    ~Processing()
+    {
+    };
+
+    /********************************************************/
+    bool open()
+    {
+
+        this->useCallback();
+
+        BufferedPort<yarp::os::Bottle >::open( "/" + moduleName + "/handSkin:i" );
+        trackerInPort.open("/" + moduleName + "/tracker:i");
+
+        // CARTESIAN LEFT
+        yarp::os::Property optCartLeftArm("(device cartesiancontrollerclient)");
+        optCartLeftArm.put("remote", "/" + robotName + "/cartesianController/left_arm");
+        optCartLeftArm.put("local", "/" + moduleName + "/cartesian/left_arm");
+        drvCartLeftArm=new yarp::dev::PolyDriver;
+        if (!drvCartLeftArm->open(optCartLeftArm))
+        {
+            yError() << "Could not open left cartesian";
+            return false;
+        }
+
+        // CARTESIAN RIGHT
+        yarp::os::Property optCartRightArm("(device cartesiancontrollerclient)");
+        optCartRightArm.put("remote", "/" + robotName + "/cartesianController/right_arm");
+        optCartRightArm.put("local", "/" + moduleName + "/cartesian/right_arm");
+        drvCartRightArm=new yarp::dev::PolyDriver;
+        if (!drvCartRightArm->open(optCartRightArm))
+        {
+            yError() << "Could not open right cartesian";
+            return false;
+        }
+
+        // GAZE
+        yarp::os::Property optGazeCtrl("(device gazecontrollerclient)");
+        optGazeCtrl.put("remote", "/iKinGazeCtrl");
+        optGazeCtrl.put("local", "/" + moduleName + "/gaze");
+        drvGaze=new yarp::dev::PolyDriver;
+        if (!drvGaze->open(optGazeCtrl))
+        {
+            yError() << "Could not open gaze";
+            return false;
+        }
+
+        // CONTROLBOARD LEFT
+        yarp::os::Property optLeftArm("(device remote_controlboard)");
+        optLeftArm.put("remote",  "/" + robotName + "/left_arm");
+        optLeftArm.put("local", "/" + moduleName + "/left_arm");
+        drvLeftArm=new yarp::dev::PolyDriver;
+        if (!drvLeftArm->open(optLeftArm))
+        {
+            yError() << "Could not open left arm";
+            return false;
+        }
+
+        // CONTROLBOARD RIGHT
+        yarp::os::Property optRightArm("(device remote_controlboard)");
+        optRightArm.put("remote",  "/" + robotName + "/right_arm");
+        optRightArm.put("local", "/" + moduleName + "/right_arm");
+        drvRightArm=new yarp::dev::PolyDriver;
+        if (!drvRightArm->open(optRightArm))
+        {
+            yError() << "Could not open right arm";
+            return false;
+        }
+
+        if (drvCartLeftArm->isValid() && drvGaze->isValid() && drvRightArm->isValid()
+                && drvLeftArm->isValid() && drvRightArm->isValid())
+        {            
+            drvLeftArm->view(iposLeft);
+            drvLeftArm->view(imodeLeft);
+            drvRightArm->view(iposRight);
+            drvRightArm->view(imodeRight);
+            drvCartLeftArm->view(icartLeft);
+            drvCartRightArm->view(icartRight);
+            drvGaze->view(igaze);
+        }
+        else
+        {
+            yError() << "Could not open arm / gaze interface";
+            close();
+            return false;
+        }
+
+        return true;
+    }
+
+    /********************************************************/
+    void close()
+    {
+        BufferedPort<yarp::os::Bottle >::close();
+        trackerInPort.close();
+
+        delete drvCartLeftArm;
+        delete drvCartRightArm;
+        delete drvLeftArm;
+        delete drvRightArm;
+        delete drvGaze;
+        delete iposLeft;
+        delete imodeLeft;
+        delete iposRight;
+        delete imodeRight;
+        delete icartLeft;
+        delete icartRight;
+        delete igaze;
+    }
+
+    /********************************************************/
+    void interrupt()
+    {
+        BufferedPort<yarp::os::Bottle >::interrupt();
+        trackerInPort.interrupt();
+    }
+
+    /********************************************************/
+    void onRead( yarp::os::Bottle &inSkin )
+    {
+//        for (int j=0; j < inSkin.size(); j++)
+//        {
+//            yarp::os::Bottle *subSkin = inSkin.get(j).asList();
+//            if (subSkin->size() > 0)
+//            {
+//                yarp::os::Bottle *bodyPart = subSkin->get(0).asList();
+//                if (bodyPart->get(1).asInt() == 3 && bodyPart->get(2).asInt() == 6 && bodyPart->get(3).asInt() == 1)
+//                {
+////                    yInfo() << "Detected left hand";
+//                    double avgPressure = subSkin->get(7).asDouble();
+//                    if (avgPressure >= 20.0)
+//                    {
+//                        yarp::os::Bottle *activeTaxels = subSkin->get(6).asList();
+//                        int countActive = 0;
+//                        for (int i = 0; i < activeTaxels->size(); i++)
+//                        {
+//                            int ai = activeTaxels->get(i).asInt();
+//                            if (ai >= 97 && ai <= 144)
+//                            {
+//                                countActive++;
+//                            }
+//                        }
+////                        yInfo() << "Found" << countActive << "palm active taxels";
+
+                        int countActive = 4;
+                        if (countActive >= 3)
+                        {
+                            yarp::os::Bottle *ballPos = trackerInPort.read();
+                            if (ballPos->size() > 0)
+                            {
+                                if (ballPos->get(3).asDouble() > 0.0005)
+                                {
+                                    yarp::sig::Vector xEye, oEye;
+                                    igaze->getLeftEyePose(xEye, oEye);
+                                    yarp::sig::Matrix eye2root = yarp::math::axis2dcm(oEye);
+                                    eye2root.setSubcol(xEye, 0, 3);
+
+                                    yarp::sig::Vector posBallEye(4);
+                                    posBallEye[0] = ballPos->get(0).asDouble();
+                                    posBallEye[1] = ballPos->get(1).asDouble();
+                                    posBallEye[2] = ballPos->get(2).asDouble();
+                                    posBallEye[3] = 1.0;
+
+                                    yarp::sig::Vector posBallRoot = eye2root * posBallEye;
+                                    posBallRoot.pop_back();
+                                    yDebug() << "Ball pos root" << posBallRoot.toString();
+
+                                    yarp::sig::Vector xHand;
+                                    yarp::sig::Vector oHand;
+                                    icartLeft->getPose(xHand, oHand);
+                                    yDebug() << "Hand Effector" << xHand.toString();
+
+                                    yarp::sig::Vector offset = posBallRoot - xHand;
+                                    yDebug() << "Offset" << offset.toString();
+                                }
+                            }
+                        }
+//                    }
+//                }
+//            }
+//        }
+
+
+    }
+
+    /**********************************************************/
+    bool calibrate(const std::string part)
+    {
+        yarp::sig::Vector xd(3);
+        yarp::sig::Vector od(4);
+        yarp::dev::ICartesianControl *icart = NULL;
+        if (part == "left")
+        {
+            xd[0] = calibLeft[0];
+            xd[1] = calibLeft[1];
+            xd[2] = calibLeft[2];
+            od[0] = calibLeft[3];
+            od[1] = calibLeft[4];
+            od[2] = calibLeft[5];
+            od[3] = calibLeft[6];
+            icart = icartLeft;
+        }
+        if (part == "right")
+        {
+            xd[0] = calibRight[0];
+            xd[1] = calibRight[1];
+            xd[2] = calibRight[2];
+            od[0] = calibRight[3];
+            od[1] = calibRight[4];
+            od[2] = calibRight[5];
+            od[3] = calibRight[6];
+            icart = icartRight;
+        }
+
+        if (!icart->goToPose(xd, od))
+        {
+            yError() << part << "arm could not reach" << xd.toString();
+            return false;
+        }
+
+        if (!igaze->lookAtFixationPoint(xd))
+        {
+            yError() << "Could not fixate" << xd.toString();
+            return false;
+        }
+
+        return true;
+    }
+
+    /**********************************************************/
+    bool home()
+    {
+        yInfo() << "Homing arms and gaze";
+        yarp::sig::Vector xd(3, 0.0);
+        xd[0] = -1.0;
+        xd[2] = 0.3;
+        if (!igaze->lookAtFixationPoint(xd))
+        {
+            yError() << "Could not fixate" << xd.toString();
+            return false;
+        }
+
+        for (size_t j=0; j<homeVels.length(); j++)
+        {
+            imodeLeft->setControlMode(j,VOCAB_CM_POSITION);
+            imodeRight->setControlMode(j,VOCAB_CM_POSITION);
+        }
+
+        for (size_t j=0; j<homeVels.length(); j++)
+        {
+            iposLeft->setRefSpeed(j,homeVels[j]);
+            iposLeft->positionMove(j,homePos[j]);
+            iposRight->setRefSpeed(j,homeVels[j]);
+            iposRight->positionMove(j,homePos[j]);
+        }
+        return true;
+    }
+};
+
+/********************************************************/
+class Module : public yarp::os::RFModule, public calibOffsets_IDL
+{
+    yarp::os::ResourceFinder    *rf;
+    yarp::os::RpcServer         rpcPort;
+
+    Processing                  *processing;
+    friend class                processing;
+
+    bool                        closing;
+
+    /********************************************************/
+    bool attach(yarp::os::RpcServer &source)
+    {
+        return this->yarp().attachAsServer(source);
+    }
+
+public:
+
+    /********************************************************/
+    bool configure(yarp::os::ResourceFinder &rf)
+    {
+        this->rf=&rf;
+        std::string moduleName = rf.check("name", yarp::os::Value("calibOffsets"), "module name (string)").asString();
+        setName(moduleName.c_str());
+
+        std::string robotName = rf.check("robot", yarp::os::Value("icub"), "robot name (string)").asString();
+
+        if (!rf.check("calibLeft") || !rf.check("calibRight"))
+        {
+            yError() << "Could not find calibLeft or calibRight";
+            return false;
+        }
+
+        if (!rf.check("homePos") || !rf.check("homeVels"))
+        {
+            yError() << "Could not find homePos or homeVels";
+            return false;
+        }
+
+        yarp::os::Bottle *calibLeft=rf.find("calibLeft").asList();
+        yarp::os::Bottle *calibRight=rf.find("calibRight").asList();
+        yarp::os::Bottle *homePos=rf.find("homePos").asList();
+        yarp::os::Bottle *homeVels=rf.find("homeVels").asList();
+
+        rpcPort.open(("/"+getName("/rpc")).c_str());
+
+        closing = false;
+        processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels );
+
+        /* now start the thread to do the work */
+        processing->open();
+
+        attach(rpcPort);
+
+        return true;
+    }
+
+    /**********************************************************/
+    bool close()
+    {
+        rpcPort.close();
+        processing->interrupt();
+        processing->close();
+        delete processing;
+        return true;
+    }
+
+    /**********************************************************/
+    bool calibrate(const std::string &part) override
+    {
+        return processing->calibrate(part);
+    }
+
+    /**********************************************************/
+    bool home() override
+    {
+        return processing->home();
+    }
+
+    /**********************************************************/
+    bool quit() override
+    {
+        closing = true;
+        return true;
+    }
+
+    /********************************************************/
+    double getPeriod()
+    {
+        return 0.1;
+    }
+
+    /********************************************************/
+    bool updateModule()
+    {
+        return !closing;
+    }
+
+};
+
+/********************************************************/
+int main(int argc, char *argv[])
+{
+    yarp::os::Network::init();
+
+    yarp::os::Network yarp;
+    if (!yarp.checkNetwork())
+    {
+        yError("YARP server not available!");
+        return 1;
+    }
+
+    Module module;
+    yarp::os::ResourceFinder rf;
+
+    rf.setVerbose();
+    rf.setDefaultContext("calibOffsets");
+    rf.setVerbose();
+    rf.setDefaultContext(rf.getContext());
+    rf.setDefaultConfigFile("config.ini");
+    rf.configure(argc,argv);
+
+    return module.runModule(rf);
+}
+//empty line to make gcc happy
