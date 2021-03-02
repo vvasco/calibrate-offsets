@@ -48,8 +48,15 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     std::string robotName;
     yarp::sig::Vector calibLeft, calibRight;
     yarp::sig::Vector homePos, homeVels;
+    double skinPressureThresh;
+    int activeTaxelsThresh;
+    double ballLikelihoodThresh;
 
     yarp::os::BufferedPort<yarp::os::Bottle > trackerInPort;
+
+    std::string part;
+    bool calibrating;
+    std::vector<double> offset;
 
     yarp::dev::PolyDriver *drvCartLeftArm;
     yarp::dev::PolyDriver *drvCartRightArm;
@@ -71,7 +78,9 @@ public:
 
     Processing( const std::string &moduleName, const std::string &robotName,
                 yarp::os::Bottle *cl, yarp::os::Bottle *cr,
-                yarp::os::Bottle *homep, yarp::os::Bottle *homev)
+                yarp::os::Bottle *homep, yarp::os::Bottle *homev,
+                const double &skinPressureThresh, const int &activeTaxelsThresh,
+                const double &ballLikelihoodThresh)
     {
         this->moduleName = moduleName;
         this->robotName = robotName;
@@ -123,6 +132,10 @@ public:
             homeVels[5] = homev->get(5).asDouble();
             homeVels[6] = homev->get(6).asDouble();
         }
+
+        this->skinPressureThresh = skinPressureThresh;
+        this->activeTaxelsThresh = activeTaxelsThresh;
+        this->ballLikelihoodThresh = ballLikelihoodThresh;
     }
 
     /********************************************************/
@@ -138,6 +151,16 @@ public:
 
         BufferedPort<yarp::os::Bottle >::open( "/" + moduleName + "/handSkin:i" );
         trackerInPort.open("/" + moduleName + "/tracker:i");
+
+        calibrating = false;
+        offset.resize(3);
+        iposLeft = NULL;
+        imodeLeft = NULL;
+        iposRight = NULL;
+        imodeRight = NULL;
+        icartLeft = NULL;
+        icartRight = NULL;
+        igaze = NULL;
 
         // CARTESIAN LEFT
         yarp::os::Property optCartLeftArm("(device cartesiancontrollerclient)");
@@ -208,7 +231,6 @@ public:
         else
         {
             yError() << "Could not open arm / gaze interface";
-            close();
             return false;
         }
 
@@ -221,23 +243,32 @@ public:
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
 
-        delete drvCartLeftArm;
-        delete drvCartRightArm;
-        delete drvLeftArm;
-        delete drvRightArm;
-        delete drvGaze;
-        delete iposLeft;
-        delete imodeLeft;
-        delete iposRight;
-        delete imodeRight;
-        delete icartLeft;
-        delete icartRight;
-        delete igaze;
+        if (drvCartLeftArm)
+        {
+            delete drvCartLeftArm;
+        }
+        if (drvCartRightArm)
+        {
+            delete drvCartRightArm;
+        }
+        if (drvLeftArm)
+        {
+            delete drvLeftArm;
+        }
+        if (drvRightArm)
+        {
+            delete drvRightArm;
+        }
+        if (drvGaze)
+        {
+            delete drvGaze;
+        }
     }
 
     /********************************************************/
     void interrupt()
     {
+        home();
         BufferedPort<yarp::os::Bottle >::interrupt();
         trackerInPort.interrupt();
     }
@@ -245,37 +276,53 @@ public:
     /********************************************************/
     void onRead( yarp::os::Bottle &inSkin )
     {
-//        for (int j=0; j < inSkin.size(); j++)
-//        {
-//            yarp::os::Bottle *subSkin = inSkin.get(j).asList();
-//            if (subSkin->size() > 0)
-//            {
-//                yarp::os::Bottle *bodyPart = subSkin->get(0).asList();
-//                if (bodyPart->get(1).asInt() == 3 && bodyPart->get(2).asInt() == 6 && bodyPart->get(3).asInt() == 1)
-//                {
-////                    yInfo() << "Detected left hand";
-//                    double avgPressure = subSkin->get(7).asDouble();
-//                    if (avgPressure >= 20.0)
-//                    {
-//                        yarp::os::Bottle *activeTaxels = subSkin->get(6).asList();
-//                        int countActive = 0;
-//                        for (int i = 0; i < activeTaxels->size(); i++)
-//                        {
-//                            int ai = activeTaxels->get(i).asInt();
-//                            if (ai >= 97 && ai <= 144)
-//                            {
-//                                countActive++;
-//                            }
-//                        }
-////                        yInfo() << "Found" << countActive << "palm active taxels";
+        std::lock_guard<std::mutex> lg(mtx);
+        for (int j=0; j < inSkin.size(); j++)
+        {
+            yarp::os::Bottle *subSkin = inSkin.get(j).asList();
+            if (subSkin->size() > 0)
+            {
+                yarp::os::Bottle *bodyPart = subSkin->get(0).asList();
+                bool ok_to_go = false;
+                if (part == "left")
+                {
+                    ok_to_go = bodyPart->get(1).asInt() == 3 && bodyPart->get(2).asInt() == 6
+                            && bodyPart->get(3).asInt() == 1;
+                }
+                else if (part == "right")
+                {
+                    ok_to_go = bodyPart->get(1).asInt() == 4 && bodyPart->get(2).asInt() == 6
+                            && bodyPart->get(3).asInt() == 4;
+                }
+                else
+                {
+                    yInfo() << "Not handled";
+                }
+//                bool ok_to_go = true;
+                if (ok_to_go && calibrating)
+                {
+                    double avgPressure = subSkin->get(7).asDouble();
+                    if (avgPressure >= skinPressureThresh)
+                    {
+                        yarp::os::Bottle *activeTaxels = subSkin->get(6).asList();
+                        int countActive = 0;
+                        for (int i = 0; i < activeTaxels->size(); i++)
+                        {
+                            int ai = activeTaxels->get(i).asInt();
+                            if (ai >= 97 && ai <= 144)
+                            {
+                                countActive++;
+                            }
+                        }
+                        yInfo() << "Found" << countActive << "palm active taxels";
 
-                        int countActive = 4;
-                        if (countActive >= 3)
+//                        int countActive = 4;
+                        if (countActive >= activeTaxelsThresh)
                         {
                             yarp::os::Bottle *ballPos = trackerInPort.read();
                             if (ballPos->size() > 0)
                             {
-                                if (ballPos->get(3).asDouble() > 0.0005)
+                                if (ballPos->get(3).asDouble() > ballLikelihoodThresh)
                                 {
                                     yarp::sig::Vector xEye, oEye;
                                     igaze->getLeftEyePose(xEye, oEye);
@@ -297,22 +344,32 @@ public:
                                     icartLeft->getPose(xHand, oHand);
                                     yDebug() << "Hand Effector" << xHand.toString();
 
-                                    yarp::sig::Vector offset = posBallRoot - xHand;
-                                    yDebug() << "Offset" << offset.toString();
+                                    offset[0] = posBallRoot[0] - xHand[0];
+                                    offset[1] = posBallRoot[1] - xHand[1];
+                                    offset[2] = posBallRoot[2] - xHand[2];
+                                    yDebug() << "Offset" << offset[0] << offset[1] << offset[2];
+                                    calibrating = false;
                                 }
                             }
                         }
-//                    }
-//                }
-//            }
-//        }
+                    }
+                }
+            }
+        }
+    }
 
-
+    /**********************************************************/
+    std::vector<double> getOffset()
+    {
+        std::lock_guard<std::mutex> lg(mtx);
+        return offset;
     }
 
     /**********************************************************/
     bool calibrate(const std::string part)
     {
+        std::lock_guard<std::mutex> lg(mtx);
+        this->part = part;
         yarp::sig::Vector xd(3);
         yarp::sig::Vector od(4);
         yarp::dev::ICartesianControl *icart = NULL;
@@ -339,24 +396,28 @@ public:
             icart = icartRight;
         }
 
-        if (!icart->goToPose(xd, od))
+        if (!icart->goToPoseSync(xd, od))
         {
             yError() << part << "arm could not reach" << xd.toString();
             return false;
         }
+        icart->waitMotionDone(0.001, 5.0);
 
-        if (!igaze->lookAtFixationPoint(xd))
+        if (!igaze->lookAtFixationPointSync(xd))
         {
             yError() << "Could not fixate" << xd.toString();
             return false;
         }
+        igaze->waitMotionDone(0.001, 5.0);
 
+        calibrating = true;
         return true;
     }
 
     /**********************************************************/
     bool home()
     {
+        std::lock_guard<std::mutex> lg(mtx);
         yInfo() << "Homing arms and gaze";
         yarp::sig::Vector xd(3, 0.0);
         xd[0] = -1.0;
@@ -429,10 +490,15 @@ public:
         yarp::os::Bottle *homePos=rf.find("homePos").asList();
         yarp::os::Bottle *homeVels=rf.find("homeVels").asList();
 
+        double skinPressureThresh = rf.check("skinPressureThresh", yarp::os::Value(20.0), "threshold for skin average pressure").asDouble();
+        int activeTaxelsThresh = rf.check("activeTaxelsThresh", yarp::os::Value(3), "threshold for palm active taxels").asInt();
+        double ballLikelihoodThresh = rf.check("ballLikelihoodThresh", yarp::os::Value(0.0005), "threshold on likelihood for detecting the ball").asDouble();
+
         rpcPort.open(("/"+getName("/rpc")).c_str());
 
         closing = false;
-        processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels );
+        processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels,
+                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh );
 
         /* now start the thread to do the work */
         processing->open();
@@ -456,6 +522,12 @@ public:
     bool calibrate(const std::string &part) override
     {
         return processing->calibrate(part);
+    }
+
+    /**********************************************************/
+    std::vector<double> getOffset() override
+    {
+        return processing->getOffset();
     }
 
     /**********************************************************/

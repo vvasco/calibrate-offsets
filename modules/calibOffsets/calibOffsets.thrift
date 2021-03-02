@@ -30,4 +30,10 @@ service calibOffsets_IDL
     */
     bool home();
 
+    /**
+     * Get reaching offset.
+     * @return reaching offset (x, y, z) with respect to robot root.
+    */
+    list<double> getOffset();
+
 }
