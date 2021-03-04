@@ -46,7 +46,7 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
 {
     std::string moduleName;
     std::string robotName;
-    yarp::sig::Vector calibLeft, calibRight;
+    yarp::sig::Vector calibLeft, calibRight, calibLeftPos;
     yarp::sig::Vector homePos, homeVels;
     double skinPressureThresh;
     int activeTaxelsThresh;
@@ -80,7 +80,7 @@ public:
                 yarp::os::Bottle *cl, yarp::os::Bottle *cr,
                 yarp::os::Bottle *homep, yarp::os::Bottle *homev,
                 const double &skinPressureThresh, const int &activeTaxelsThresh,
-                const double &ballLikelihoodThresh)
+                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition)
     {
         this->moduleName = moduleName;
         this->robotName = robotName;
@@ -132,10 +132,23 @@ public:
             homeVels[5] = homev->get(5).asDouble();
             homeVels[6] = homev->get(6).asDouble();
         }
+        
+         if (calibLeftPosition->size() > 0)
+        {
+            calibLeftPos.resize(7);
+            calibLeftPos[0] = calibLeftPosition->get(0).asDouble();
+            calibLeftPos[1] = calibLeftPosition->get(1).asDouble();
+            calibLeftPos[2] = calibLeftPosition->get(2).asDouble();
+            calibLeftPos[3] = calibLeftPosition->get(3).asDouble();
+            calibLeftPos[4] = calibLeftPosition->get(4).asDouble();
+            calibLeftPos[5] = calibLeftPosition->get(5).asDouble();
+            calibLeftPos[6] = calibLeftPosition->get(6).asDouble();
+        }
 
         this->skinPressureThresh = skinPressureThresh;
         this->activeTaxelsThresh = activeTaxelsThresh;
         this->ballLikelihoodThresh = ballLikelihoodThresh;
+     
     }
 
     /********************************************************/
@@ -233,7 +246,16 @@ public:
             yError() << "Could not open arm / gaze interface";
             return false;
         }
-
+        
+        for (size_t j=0; j<homeVels.length(); j++)
+        {
+            imodeLeft->setControlMode(j,VOCAB_CM_POSITION);
+            imodeRight->setControlMode(j,VOCAB_CM_POSITION);
+            
+            iposLeft->setRefSpeed(j,homeVels[j]);
+            iposRight->setRefSpeed(j,homeVels[j]);
+        }
+        
         return true;
     }
 
@@ -395,17 +417,33 @@ public:
             od[3] = calibRight[6];
             icart = icartRight;
         }
-
-        if (!icart->goToPoseSync(xd, od))
+        
+      
+        for (size_t j=0; j<calibLeftPos.length(); j++)
         {
-            yError() << part << "arm could not reach" << xd.toString();
-            return false;
-        }
-        icart->waitMotionDone(0.001, 5.0);
+            iposLeft->setRefSpeed(j,homeVels[j]);
+	    iposLeft->positionMove(j,calibLeftPos[j]);
+	}
+        //if (!icart->goToPoseSync(xd, od))
+        //{
+        //   yError() << part << "arm could not reach" << xd.toString();
+        //  return false;
+        //}
+        //icart->waitMotionDone(0.001, 5.0);
+        
+	yarp::sig::Vector x0,o0;
+	bool done = false;
+	
+	while (done==false){
+	    iposLeft->checkMotionDone(&done);
+	    yarp::os::Time::delay(0.1);
+	    yInfo() << "Done" << done;
+	}
+	icart->getPose(x0,o0);
 
-        if (!igaze->lookAtFixationPointSync(xd))
+        if (!igaze->lookAtFixationPointSync(x0))
         {
-            yError() << "Could not fixate" << xd.toString();
+            yError() << "Could not fixate" << x0.toString();
             return false;
         }
         igaze->waitMotionDone(0.001, 5.0);
@@ -428,17 +466,17 @@ public:
             return false;
         }
 
-        for (size_t j=0; j<homeVels.length(); j++)
-        {
-            imodeLeft->setControlMode(j,VOCAB_CM_POSITION);
-            imodeRight->setControlMode(j,VOCAB_CM_POSITION);
-        }
+        //for (size_t j=0; j<homeVels.length(); j++)
+        //{
+        //    imodeLeft->setControlMode(j,VOCAB_CM_POSITION);
+        //    imodeRight->setControlMode(j,VOCAB_CM_POSITION);
+        //}
 
         for (size_t j=0; j<homeVels.length(); j++)
         {
-            iposLeft->setRefSpeed(j,homeVels[j]);
+            //iposLeft->setRefSpeed(j,homeVels[j]);
             iposLeft->positionMove(j,homePos[j]);
-            iposRight->setRefSpeed(j,homeVels[j]);
+            //iposRight->setRefSpeed(j,homeVels[j]);
             iposRight->positionMove(j,homePos[j]);
         }
         return true;
@@ -484,11 +522,18 @@ public:
             yError() << "Could not find homePos or homeVels";
             return false;
         }
+       
+        if (!rf.check("calibLeftPosition"))
+        {
+            yError() << "Could not find calibLeftPosition";
+            return false;
+        }
 
         yarp::os::Bottle *calibLeft=rf.find("calibLeft").asList();
         yarp::os::Bottle *calibRight=rf.find("calibRight").asList();
         yarp::os::Bottle *homePos=rf.find("homePos").asList();
         yarp::os::Bottle *homeVels=rf.find("homeVels").asList();
+        yarp::os::Bottle *calibLeftPosition=rf.find("calibLeftPosition").asList();
 
         double skinPressureThresh = rf.check("skinPressureThresh", yarp::os::Value(20.0), "threshold for skin average pressure").asDouble();
         int activeTaxelsThresh = rf.check("activeTaxelsThresh", yarp::os::Value(3), "threshold for palm active taxels").asInt();
@@ -498,7 +543,7 @@ public:
 
         closing = false;
         processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels,
-                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh );
+                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition );
 
         /* now start the thread to do the work */
         processing->open();
