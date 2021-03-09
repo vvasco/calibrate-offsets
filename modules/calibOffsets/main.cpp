@@ -440,8 +440,8 @@ public:
 
             for (size_t j=0; j<calibRightPos.length(); j++)
             {
-                iposLeft->setRefSpeed(j,homeVels[j]);
-                iposLeft->positionMove(j,calibRightPos[j]);
+                iposRight->setRefSpeed(j,homeVels[j]);
+                iposRight->positionMove(j,calibRightPos[j]);
             }
         }
         
