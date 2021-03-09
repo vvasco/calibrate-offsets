@@ -46,11 +46,12 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
 {
     std::string moduleName;
     std::string robotName;
-    yarp::sig::Vector calibLeft, calibRight, calibLeftPos;
+    yarp::sig::Vector calibLeft, calibRight, calibLeftPos, calibRightPos;
     yarp::sig::Vector homePos, homeVels;
     double skinPressureThresh;
     int activeTaxelsThresh;
     double ballLikelihoodThresh;
+    double ball_radius;
 
     yarp::os::BufferedPort<yarp::os::Bottle > trackerInPort;
 
@@ -80,7 +81,7 @@ public:
                 yarp::os::Bottle *cl, yarp::os::Bottle *cr,
                 yarp::os::Bottle *homep, yarp::os::Bottle *homev,
                 const double &skinPressureThresh, const int &activeTaxelsThresh,
-                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition)
+                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition, yarp::os::Bottle *calibRightPosition)
     {
         this->moduleName = moduleName;
         this->robotName = robotName;
@@ -133,7 +134,7 @@ public:
             homeVels[6] = homev->get(6).asDouble();
         }
         
-         if (calibLeftPosition->size() > 0)
+        if (calibLeftPosition->size() > 0)
         {
             calibLeftPos.resize(7);
             calibLeftPos[0] = calibLeftPosition->get(0).asDouble();
@@ -143,6 +144,18 @@ public:
             calibLeftPos[4] = calibLeftPosition->get(4).asDouble();
             calibLeftPos[5] = calibLeftPosition->get(5).asDouble();
             calibLeftPos[6] = calibLeftPosition->get(6).asDouble();
+        }
+
+        if (calibRightPosition->size() > 0)
+        {
+            calibRightPos.resize(7);
+            calibRightPos[0] = calibRightPosition->get(0).asDouble();
+            calibRightPos[1] = calibRightPosition->get(1).asDouble();
+            calibRightPos[2] = calibRightPosition->get(2).asDouble();
+            calibRightPos[3] = calibRightPosition->get(3).asDouble();
+            calibRightPos[4] = calibRightPosition->get(4).asDouble();
+            calibRightPos[5] = calibRightPosition->get(5).asDouble();
+            calibRightPos[6] = calibRightPosition->get(6).asDouble();
         }
 
         this->skinPressureThresh = skinPressureThresh;
@@ -174,6 +187,7 @@ public:
         icartLeft = NULL;
         icartRight = NULL;
         igaze = NULL;
+        ball_radius = 3.0;
 
         // CARTESIAN LEFT
         yarp::os::Property optCartLeftArm("(device cartesiancontrollerclient)");
@@ -366,9 +380,10 @@ public:
                                     icartLeft->getPose(xHand, oHand);
                                     yDebug() << "Hand Effector" << xHand.toString();
 
-                                    offset[0] = posBallRoot[0] - xHand[0];
-                                    offset[1] = posBallRoot[1] - xHand[1];
-                                    offset[2] = posBallRoot[2] - xHand[2];
+                                    double offset_x = 1.0;
+                                    offset[0] = xHand[0] - posBallRoot[0] + offset_x;
+                                    offset[1] = xHand[1] - posBallRoot[1] + ball_radius*2;
+                                    offset[2] = xHand[2] - posBallRoot[2];
                                     yDebug() << "Offset" << offset[0] << offset[1] << offset[2];
                                     calibrating = false;
                                 }
@@ -405,8 +420,14 @@ public:
             od[2] = calibLeft[5];
             od[3] = calibLeft[6];
             icart = icartLeft;
+
+            for (size_t j=0; j<calibLeftPos.length(); j++)
+            {
+                iposLeft->setRefSpeed(j,homeVels[j]);
+                iposLeft->positionMove(j,calibLeftPos[j]);
+            }
         }
-        if (part == "right")
+        else if (part == "right")
         {
             xd[0] = calibRight[0];
             xd[1] = calibRight[1];
@@ -416,14 +437,15 @@ public:
             od[2] = calibRight[5];
             od[3] = calibRight[6];
             icart = icartRight;
+
+            for (size_t j=0; j<calibRightPos.length(); j++)
+            {
+                iposLeft->setRefSpeed(j,homeVels[j]);
+                iposLeft->positionMove(j,calibRightPos[j]);
+            }
         }
         
-      
-        for (size_t j=0; j<calibLeftPos.length(); j++)
-        {
-            iposLeft->setRefSpeed(j,homeVels[j]);
-	    iposLeft->positionMove(j,calibLeftPos[j]);
-	}
+    
         //if (!icart->goToPoseSync(xd, od))
         //{
         //   yError() << part << "arm could not reach" << xd.toString();
@@ -431,15 +453,22 @@ public:
         //}
         //icart->waitMotionDone(0.001, 5.0);
         
-	yarp::sig::Vector x0,o0;
-	bool done = false;
-	
-	while (done==false){
-	    iposLeft->checkMotionDone(&done);
-	    yarp::os::Time::delay(0.1);
-	    yInfo() << "Done" << done;
-	}
-	icart->getPose(x0,o0);
+        yarp::sig::Vector x0,o0;
+        bool done = false;
+        
+        while (done==false){
+            if (part == "left") 
+            {
+                iposLeft->checkMotionDone(&done);
+            } 
+            else if (part == "right") 
+            {
+                iposRight->checkMotionDone(&done);
+            }
+            yarp::os::Time::delay(0.1);
+            yInfo() << "Done" << done;
+        }
+        icart->getPose(x0,o0);
 
         if (!igaze->lookAtFixationPointSync(x0))
         {
@@ -523,9 +552,9 @@ public:
             return false;
         }
        
-        if (!rf.check("calibLeftPosition"))
+        if (!rf.check("calibLeftPosition") || !rf.check("calibRightPosition"))
         {
-            yError() << "Could not find calibLeftPosition";
+            yError() << "Could not find calibLeftPosition or calibRightPosition";
             return false;
         }
 
@@ -534,6 +563,8 @@ public:
         yarp::os::Bottle *homePos=rf.find("homePos").asList();
         yarp::os::Bottle *homeVels=rf.find("homeVels").asList();
         yarp::os::Bottle *calibLeftPosition=rf.find("calibLeftPosition").asList();
+        yarp::os::Bottle *calibRightPosition=rf.find("calibRightPosition").asList();
+
 
         double skinPressureThresh = rf.check("skinPressureThresh", yarp::os::Value(20.0), "threshold for skin average pressure").asDouble();
         int activeTaxelsThresh = rf.check("activeTaxelsThresh", yarp::os::Value(3), "threshold for palm active taxels").asInt();
@@ -543,7 +574,7 @@ public:
 
         closing = false;
         processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels,
-                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition );
+                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition, calibRightPosition );
 
         /* now start the thread to do the work */
         processing->open();
