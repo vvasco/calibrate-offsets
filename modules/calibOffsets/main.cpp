@@ -34,7 +34,7 @@
 #include <yarp/dev/IPositionControl.h>
 
 #include <yarp/math/Math.h>
-
+#include <iCub/ctrl/filters.h>
 #include <sstream>
 #include <string>
 #include <fstream>
@@ -51,13 +51,16 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     double skinPressureThresh;
     int activeTaxelsThresh;
     double ballLikelihoodThresh;
-    double ball_radius;
+    int filterOrder;
+    int countOffset;
 
     yarp::os::BufferedPort<yarp::os::Bottle > trackerInPort;
 
     std::string part;
     bool calibrating;
-    std::vector<double> offset;
+    yarp::sig::Vector offset;
+    iCub::ctrl::MedianFilter* offsetFilter;
+    yarp::sig::Vector filteredOffset;
 
     yarp::dev::PolyDriver *drvCartLeftArm;
     yarp::dev::PolyDriver *drvCartRightArm;
@@ -81,7 +84,7 @@ public:
                 yarp::os::Bottle *cl, yarp::os::Bottle *cr,
                 yarp::os::Bottle *homep, yarp::os::Bottle *homev,
                 const double &skinPressureThresh, const int &activeTaxelsThresh,
-                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition, yarp::os::Bottle *calibRightPosition)
+                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition, yarp::os::Bottle *calibRightPosition, const int filterOrder)
     {
         this->moduleName = moduleName;
         this->robotName = robotName;
@@ -161,6 +164,7 @@ public:
         this->skinPressureThresh = skinPressureThresh;
         this->activeTaxelsThresh = activeTaxelsThresh;
         this->ballLikelihoodThresh = ballLikelihoodThresh;
+        this->filterOrder = filterOrder;
      
     }
 
@@ -187,8 +191,10 @@ public:
         icartLeft = NULL;
         icartRight = NULL;
         igaze = NULL;
-        ball_radius = 3.0;
-
+        offsetFilter=new iCub::ctrl::MedianFilter(filterOrder,yarp::sig::Vector(3,0.0));
+        countOffset = 0;
+        filteredOffset = yarp::sig::Vector(3,0.0);
+	
         // CARTESIAN LEFT
         yarp::os::Property optCartLeftArm("(device cartesiancontrollerclient)");
         optCartLeftArm.put("remote", "/" + robotName + "/cartesianController/left_arm");
@@ -278,6 +284,7 @@ public:
     {
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
+        
 
         if (drvCartLeftArm)
         {
@@ -298,6 +305,10 @@ public:
         if (drvGaze)
         {
             delete drvGaze;
+        }   
+        if (offsetFilter)
+        {
+            delete offsetFilter;
         }
     }
 
@@ -313,6 +324,7 @@ public:
     void onRead( yarp::os::Bottle &inSkin )
     {
         std::lock_guard<std::mutex> lg(mtx);
+        
         for (int j=0; j < inSkin.size(); j++)
         {
             yarp::os::Bottle *subSkin = inSkin.get(j).asList();
@@ -359,7 +371,8 @@ public:
                             if (ballPos->size() > 0)
                             {
                                 if (ballPos->get(3).asDouble() > ballLikelihoodThresh)
-                                {
+                                {   
+    
                                     yarp::sig::Vector xEye, oEye;
                                     igaze->getLeftEyePose(xEye, oEye);
                                     yarp::sig::Matrix eye2root = yarp::math::axis2dcm(oEye);
@@ -380,12 +393,19 @@ public:
                                     icartLeft->getPose(xHand, oHand);
                                     yDebug() << "Hand Effector" << xHand.toString();
 
-                                    double offset_x = 1.0;
-                                    offset[0] = xHand[0] - posBallRoot[0] + offset_x;
-                                    offset[1] = xHand[1] - posBallRoot[1] + ball_radius*2;
+                
+                                    offset[0] = xHand[0] - posBallRoot[0];
+                                    offset[1] = xHand[1] - posBallRoot[1];
                                     offset[2] = xHand[2] - posBallRoot[2];
                                     yDebug() << "Offset" << offset[0] << offset[1] << offset[2];
-                                    calibrating = false;
+                                    countOffset++;
+                                    
+                                    filteredOffset=offsetFilter->filt(offset);
+                                    
+                                    if(countOffset >= filterOrder){
+                                       yDebug() << "Filtered offset" << filteredOffset.toString();
+                                       calibrating = false;
+                                    }
                                 }
                             }
                         }
@@ -399,17 +419,24 @@ public:
     std::vector<double> getOffset()
     {
         std::lock_guard<std::mutex> lg(mtx);
-        return offset;
+        std::vector<double> tmpOffset(3);
+        tmpOffset[0] = filteredOffset[0];
+        tmpOffset[1] = filteredOffset[1];
+        tmpOffset[2] = filteredOffset[2];
+
+        return tmpOffset;
     }
 
     /**********************************************************/
     bool calibrate(const std::string part)
     {
         std::lock_guard<std::mutex> lg(mtx);
+        countOffset = 0;
         this->part = part;
         yarp::sig::Vector xd(3);
         yarp::sig::Vector od(4);
         yarp::dev::ICartesianControl *icart = NULL;
+        offsetFilter->init(yarp::sig::Vector(3,0.0));
         if (part == "left")
         {
             xd[0] = calibLeft[0];
@@ -557,7 +584,7 @@ public:
             yError() << "Could not find calibLeftPosition or calibRightPosition";
             return false;
         }
-
+   
         yarp::os::Bottle *calibLeft=rf.find("calibLeft").asList();
         yarp::os::Bottle *calibRight=rf.find("calibRight").asList();
         yarp::os::Bottle *homePos=rf.find("homePos").asList();
@@ -569,12 +596,13 @@ public:
         double skinPressureThresh = rf.check("skinPressureThresh", yarp::os::Value(20.0), "threshold for skin average pressure").asDouble();
         int activeTaxelsThresh = rf.check("activeTaxelsThresh", yarp::os::Value(3), "threshold for palm active taxels").asInt();
         double ballLikelihoodThresh = rf.check("ballLikelihoodThresh", yarp::os::Value(0.0005), "threshold on likelihood for detecting the ball").asDouble();
+        int filterOrder = rf.check("filterOrder", yarp::os::Value(10), "order of the filter").asInt();
 
         rpcPort.open(("/"+getName("/rpc")).c_str());
 
         closing = false;
         processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels,
-                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition, calibRightPosition );
+                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition, calibRightPosition, filterOrder );
 
         /* now start the thread to do the work */
         processing->open();
