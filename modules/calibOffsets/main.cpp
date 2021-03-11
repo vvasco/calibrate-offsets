@@ -61,8 +61,8 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     bool calibrating;
     yarp::sig::Vector offset;
     iCub::ctrl::MedianFilter* offsetFilter;
-    yarp::sig::Vector filteredOffset;
     std::vector<int> allowedTaxels{126,127,129,102,103,104,122,128,130,99,97,100};
+    yarp::sig::Vector filteredOffsetLeft, filteredOffsetRight;
 
     yarp::dev::PolyDriver *drvCartLeftArm;
     yarp::dev::PolyDriver *drvCartRightArm;
@@ -195,7 +195,8 @@ public:
         igaze = NULL;
         offsetFilter=new iCub::ctrl::MedianFilter(filterOrder,yarp::sig::Vector(3,0.0));
         countOffset = 0;
-        filteredOffset = yarp::sig::Vector(3,0.0);
+        filteredOffsetLeft = yarp::sig::Vector(3,0.0);
+        filteredOffsetRight = yarp::sig::Vector(3,0.0);
 	
         // CARTESIAN LEFT
         yarp::os::Property optCartLeftArm("(device cartesiancontrollerclient)");
@@ -283,7 +284,34 @@ public:
 
     /********************************************************/
     void close()
-    {
+    {   
+        double x_offset = 0.01;
+        double ball_radius = 0.03;
+        std::ofstream oFile("calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
+        if (oFile.is_open())
+        {
+            while (oFile.good())
+            {   
+                // LEFT_ARM
+                oFile << "[left_arm]" << "\n";
+                oFile << "reach_offset" << "\t" ;
+                oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - 2*ball_radius << " " << filteredOffsetLeft[2];
+                oFile <<  "\n";
+                oFile << "grasp_offset" << "\t" ;
+                oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - ball_radius << " " << filteredOffsetLeft[2];
+                oFile <<  "\n";
+                // RIGHT_ARM
+                oFile << "[right_arm]" << "\n";
+                oFile << "reach_offset" << "\t" ;
+                oFile <<  filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + 2*ball_radius << " " << filteredOffsetRight[2]; // NOTE: we still need to define some further offsets for the right arm;
+                oFile <<  "\n";
+                oFile << "grasp_offset" << "\t" ;
+                oFile << filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + ball_radius << " " << filteredOffsetRight[2];
+                oFile <<  "\n";
+            }
+            oFile.close();
+        }
+
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
         
@@ -409,11 +437,17 @@ public:
                                     offset[2] = xHand[2] - posBallRoot[2];
                                     yDebug() << "Offset" << offset[0] << offset[1] << offset[2];
                                     countOffset++;
-                                    yDebug() << "countOffset" << countOffset;
-                                    filteredOffset=offsetFilter->filt(offset);
-                                    
+                                                                        
+                                    if (part == "left")
+                                    {
+                                        filteredOffsetLeft=offsetFilter->filt(offset);
+                                    }
+                                    else if (part == "right")
+                                    {
+                                        filteredOffsetRight=offsetFilter->filt(offset);
+                                    }
                                     if(countOffset > filterOrder){
-                                       yDebug() << "Filtered offset" << filteredOffset.toString();
+                                       yDebug() << "Filtered offset" << filteredOffsetLeft.toString();
                                        calibrating = false;
                                     }
                                 }
@@ -426,14 +460,21 @@ public:
     }
 
     /**********************************************************/
-    std::vector<double> getOffset()
+    std::vector<double> getOffset(const std::string part)
     {
         std::lock_guard<std::mutex> lg(mtx);
         std::vector<double> tmpOffset(3);
-        tmpOffset[0] = filteredOffset[0];
-        tmpOffset[1] = filteredOffset[1];
-        tmpOffset[2] = filteredOffset[2];
-
+        if(part == "left"){
+            tmpOffset[0] = filteredOffsetLeft[0];
+            tmpOffset[1] = filteredOffsetLeft[1];
+            tmpOffset[2] = filteredOffsetLeft[2];
+        }
+        else if(part == "right"){
+            tmpOffset[0] = filteredOffsetRight[0];
+            tmpOffset[1] = filteredOffsetRight[1];
+            tmpOffset[2] = filteredOffsetRight[2];
+        }
+       
         return tmpOffset;
     }
 
@@ -624,7 +665,7 @@ public:
 
     /**********************************************************/
     bool close()
-    {
+    {   
         rpcPort.close();
         processing->interrupt();
         processing->close();
@@ -639,9 +680,9 @@ public:
     }
 
     /**********************************************************/
-    std::vector<double> getOffset() override
+    std::vector<double> getOffset(const std::string &part) override
     {
-        return processing->getOffset();
+        return processing->getOffset(part);
     }
 
     /**********************************************************/
