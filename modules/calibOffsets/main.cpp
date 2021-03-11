@@ -38,6 +38,7 @@
 #include <sstream>
 #include <string>
 #include <fstream>
+#include <algorithm>
 
 #include "calibOffsets_IDL.h"
 
@@ -61,6 +62,7 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     yarp::sig::Vector offset;
     iCub::ctrl::MedianFilter* offsetFilter;
     yarp::sig::Vector filteredOffset;
+    std::vector<int> allowedTaxels{126,127,129,102,103,104,122,128,130,99,97,100};
 
     yarp::dev::PolyDriver *drvCartLeftArm;
     yarp::dev::PolyDriver *drvCartRightArm;
@@ -322,7 +324,8 @@ public:
 
     /********************************************************/
     void onRead( yarp::os::Bottle &inSkin )
-    {
+    {   
+        
         std::lock_guard<std::mutex> lg(mtx);
         
         for (int j=0; j < inSkin.size(); j++)
@@ -357,8 +360,8 @@ public:
                         for (int i = 0; i < activeTaxels->size(); i++)
                         {
                             int ai = activeTaxels->get(i).asInt();
-                            if (ai >= 97 && ai <= 144)
-                            {
+                            if(std::count(allowedTaxels.begin(), allowedTaxels.end(), ai))//if (ai >= 97 && ai <= 144)
+                            {   
                                 countActive++;
                             }
                         }
@@ -390,7 +393,14 @@ public:
 
                                     yarp::sig::Vector xHand;
                                     yarp::sig::Vector oHand;
-                                    icartLeft->getPose(xHand, oHand);
+                                     if (part == "left")
+                                    {  
+                                         icartLeft->getPose(xHand, oHand);
+                                    }
+                                     if (part == "right")
+                                    {  
+                                        icartRight->getPose(xHand, oHand);
+                                    }
                                     yDebug() << "Hand Effector" << xHand.toString();
 
                 
@@ -399,10 +409,10 @@ public:
                                     offset[2] = xHand[2] - posBallRoot[2];
                                     yDebug() << "Offset" << offset[0] << offset[1] << offset[2];
                                     countOffset++;
-                                    
+                                    yDebug() << "countOffset" << countOffset;
                                     filteredOffset=offsetFilter->filt(offset);
                                     
-                                    if(countOffset >= filterOrder){
+                                    if(countOffset > filterOrder){
                                        yDebug() << "Filtered offset" << filteredOffset.toString();
                                        calibrating = false;
                                     }
@@ -596,7 +606,7 @@ public:
         double skinPressureThresh = rf.check("skinPressureThresh", yarp::os::Value(20.0), "threshold for skin average pressure").asDouble();
         int activeTaxelsThresh = rf.check("activeTaxelsThresh", yarp::os::Value(3), "threshold for palm active taxels").asInt();
         double ballLikelihoodThresh = rf.check("ballLikelihoodThresh", yarp::os::Value(0.0005), "threshold on likelihood for detecting the ball").asDouble();
-        int filterOrder = rf.check("filterOrder", yarp::os::Value(10), "order of the filter").asInt();
+        int filterOrder = rf.check("filterOrder", yarp::os::Value(20), "order of the filter").asInt();
 
         rpcPort.open(("/"+getName("/rpc")).c_str());
 
