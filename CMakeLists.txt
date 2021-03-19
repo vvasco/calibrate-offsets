@@ -4,9 +4,11 @@
 
 project(calib-red-ball)
 
-find_package(YARP REQUIRED COMPONENTS os sig dev math)
-find_package(ICUB REQUIRED)
+find_package(OpenCV REQUIRED)
+find_package(YCM REQUIRED)
 find_package(ICUBcontrib REQUIRED)
+find_package(ICUB REQUIRED)
+find_package(YARP REQUIRED COMPONENTS os sig dev math cv)
 
 list(APPEND CMAKE_MODULE_PATH ${ICUB_MODULE_PATH} ${ICUBCONTRIB_MODULE_PATH})
 

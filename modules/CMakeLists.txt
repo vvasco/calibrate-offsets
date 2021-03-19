@@ -3,4 +3,5 @@
 # Authors: Valentina Vasco <valentina.vasco@iit.it>
 
 add_subdirectory(calibOffsets)
+add_subdirectory(calibColor)
 
