@@ -36,6 +36,7 @@
 #include <yarp/math/Math.h>
 #include <iCub/ctrl/filters.h>
 #include <sstream>
+#include <iostream>
 #include <string>
 #include <fstream>
 #include <algorithm>
@@ -44,7 +45,8 @@
 
 /********************************************************/
 class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
-{
+{   
+
     std::string moduleName;
     std::string robotName;
     yarp::sig::Vector calibLeft, calibRight, calibLeftPos, calibRightPos;
@@ -54,11 +56,12 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     double ballLikelihoodThresh;
     int filterOrder;
     int countOffset;
+    yarp::os::ResourceFinder rf;
 
     yarp::os::BufferedPort<yarp::os::Bottle > trackerInPort;
 
     std::string part;
-    bool calibrating;
+    bool calibrating, calibrate_right, calibrate_left;
     yarp::sig::Vector offset;
     iCub::ctrl::MedianFilter* offsetFilter;
     std::vector<int> allowedTaxels{126,127,129,102,103,104,122,128,130,99,97,100};
@@ -80,14 +83,15 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     std::mutex mtx;
 
 public:
-    /********************************************************/
+
 
     Processing( const std::string &moduleName, const std::string &robotName,
                 yarp::os::Bottle *cl, yarp::os::Bottle *cr,
                 yarp::os::Bottle *homep, yarp::os::Bottle *homev,
                 const double &skinPressureThresh, const int &activeTaxelsThresh,
-                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition, yarp::os::Bottle *calibRightPosition, const int filterOrder)
-    {
+                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition, yarp::os::Bottle *calibRightPosition, const int filterOrder, yarp::os::ResourceFinder &rf)
+    {   
+        this->rf=rf;
         this->moduleName = moduleName;
         this->robotName = robotName;
 
@@ -185,6 +189,8 @@ public:
         trackerInPort.open("/" + moduleName + "/tracker:i");
 
         calibrating = false;
+        calibrate_left = false;
+        calibrate_right = false;
         offset.resize(3);
         iposLeft = NULL;
         imodeLeft = NULL;
@@ -287,30 +293,37 @@ public:
     {   
         double x_offset = 0.01;
         double ball_radius = 0.03;
-        std::ofstream oFile("calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
+        std::string path = rf.getHomeContextPath().c_str(); 
+        std::ofstream oFile( path + "/calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
         if (oFile.is_open())
-        {
-            while (oFile.good())
-            {   
-                // LEFT_ARM
-                oFile << "[left_arm]" << "\n";
-                oFile << "reach_offset" << "\t" ;
-                oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - 2*ball_radius << " " << filteredOffsetLeft[2];
-                oFile <<  "\n";
-                oFile << "grasp_offset" << "\t" ;
-                oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - ball_radius << " " << filteredOffsetLeft[2];
-                oFile <<  "\n";
-                // RIGHT_ARM
-                oFile << "[right_arm]" << "\n";
-                oFile << "reach_offset" << "\t" ;
-                oFile <<  filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + 2*ball_radius << " " << filteredOffsetRight[2]; // NOTE: we still need to define some further offsets for the right arm;
-                oFile <<  "\n";
-                oFile << "grasp_offset" << "\t" ;
-                oFile << filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + ball_radius << " " << filteredOffsetRight[2];
-                oFile <<  "\n";
-            }
+        {        
+            // LEFT_ARM
+             if (calibrate_left){
+		    oFile << "[left_arm]" << "\n";
+		    oFile << "reach_offset" << "\t" ;
+		    oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - 2*ball_radius << " " << filteredOffsetLeft[2];
+		    oFile <<  "\n";
+		    oFile << "grasp_offset" << "\t" ;
+		    oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - ball_radius << " " << filteredOffsetLeft[2];
+		    oFile <<  "\n";
+	     }
+            // RIGHT_ARM
+             if (calibrate_right){
+		    oFile << "[right_arm]" << "\n";
+		    oFile << "reach_offset" << "\t" ;
+		    oFile <<  filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + 2*ball_radius << " " << filteredOffsetRight[2]; // NOTE: we still need to define some further offsets for the right arm;
+		    oFile <<  "\n";
+		    oFile << "grasp_offset" << "\t" ;
+		    oFile << filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + ball_radius << " " << filteredOffsetRight[2];
+		    oFile <<  "\n";
+   	    }
             oFile.close();
         }
+        
+        // RUNNING THE SCRIPT FOR THE AUTOMATIC EXPORT OF calibOffsetsResults.txt TO demoRedBall config.ini
+        //std::string command = "/bin/bash -c '" + path + "/exportOffsetToDemoRedBall.sh " + path + "/calibOffsetsResults.txt'";
+        //yDebug() << "command: " << command;
+        //system(command.c_str());
 
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
@@ -369,7 +382,8 @@ public:
                             && bodyPart->get(3).asInt() == 1;
                 }
                 else if (part == "right")
-                {
+                {   
+
                     ok_to_go = bodyPart->get(1).asInt() == 4 && bodyPart->get(2).asInt() == 6
                             && bodyPart->get(3).asInt() == 4;
                 }
@@ -378,11 +392,12 @@ public:
                     yInfo() << "Not handled";
                 }
 //                bool ok_to_go = true;
+
                 if (ok_to_go && calibrating)
-                {
+                {    
                     double avgPressure = subSkin->get(7).asDouble();
                     if (avgPressure >= skinPressureThresh)
-                    {
+                    {   
                         yarp::os::Bottle *activeTaxels = subSkin->get(6).asList();
                         int countActive = 0;
                         for (int i = 0; i < activeTaxels->size(); i++)
@@ -441,13 +456,22 @@ public:
                                     if (part == "left")
                                     {
                                         filteredOffsetLeft=offsetFilter->filt(offset);
+                                        calibrate_left = true;
                                     }
                                     else if (part == "right")
                                     {
                                         filteredOffsetRight=offsetFilter->filt(offset);
+                                        calibrate_right = true;
                                     }
-                                    if(countOffset > filterOrder){
-                                       yDebug() << "Filtered offset" << filteredOffsetLeft.toString();
+                                    if(countOffset > filterOrder){                    
+                                       if (part == "left")
+                                        {
+                                           yDebug() << "Filtered offset left" << filteredOffsetLeft.toString();
+                                        }
+                                        else if (part == "right")
+                                        {
+                                            yDebug() << "Filtered offset right" << filteredOffsetRight.toString();
+                                        }
                                        calibrating = false;
                                     }
                                 }
@@ -653,7 +677,7 @@ public:
 
         closing = false;
         processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels,
-                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition, calibRightPosition, filterOrder );
+                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition, calibRightPosition, filterOrder, rf);
 
         /* now start the thread to do the work */
         processing->open();
