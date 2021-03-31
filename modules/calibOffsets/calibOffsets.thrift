@@ -37,4 +37,11 @@ service calibOffsets_IDL
     */
     list<double> getOffset(1:string part);
 
+    /**
+     * Write offsets to file.
+     * @return true/false on success/failure.
+    */
+    bool writeToFile();
+
+
 }

@@ -289,14 +289,19 @@ public:
     }
 
     /********************************************************/
-    void close()
-    {   
+    bool writeToFile() override
+    {
+        if (!calibrate_left && !calibrate_right)
+        {
+            yInfo() << "Left / right arm not yet calibrated";
+            return false;
+        }
         double x_offset = 0.01;
         double ball_radius = 0.03;
-        std::string path = rf.getHomeContextPath().c_str(); 
+        std::string path = rf.getHomeContextPath().c_str();
         std::ofstream oFile( path + "/calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
         if (oFile.is_open())
-        {        
+        {
             // LEFT_ARM
              if (calibrate_left){
 		    oFile << "[left_arm]" << "\n";
@@ -318,13 +323,23 @@ public:
 		    oFile <<  "\n";
    	    }
             oFile.close();
+            return true;
         }
-        
+        else
+        {
+            yError() << "Could not open the file";
+            return false;
+        }
+
         // RUNNING THE SCRIPT FOR THE AUTOMATIC EXPORT OF calibOffsetsResults.txt TO demoRedBall config.ini
         //std::string command = "/bin/bash -c '" + script_path + "/exportOffsetToDemoRedBall.sh " + path + "/calibOffsetsResults.txt'";
         //yDebug() << "command: " << command;
         //system(command.c_str());
+    }
 
+    /********************************************************/
+    void close()
+    {   
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
         
