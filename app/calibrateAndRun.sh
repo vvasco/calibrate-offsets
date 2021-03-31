@@ -96,7 +96,7 @@ function getFileParameters () {
 
  if [[ $# -lt 1 ]] ; then
      echo "No options were passed!"
-     echo "Please insert the input.txt file resulting from calibOffsets"
+     echo "Please insert the calibOffsetsResults.txt file resulting from calibOffsets"
 
      exit 1
  fi
@@ -109,12 +109,22 @@ declare -A leftOffsetsMatrix
 declare -A rightOffsetsMatrix 
 declare -A configIniMatrix
 
-getFileParameters $1 leftOffsetsMatrix rightOffsetsMatrix
+calibResultFile=$(yarp resource --context calibOffsets --from $1 | awk -F'"' '{print $2}' ) 
+if [ -s $calibResultFile ]
+then 
+   echo "File $calibResultFile not found"
+   exit 1 
+fi
+getFileParameters $calibResultFile leftOffsetsMatrix rightOffsetsMatrix
 
 configIniFile=$(yarp resource --context demoRedBall --from config.ini | awk -F'"' '{print $2}' ) 
 echo "Using file $configIniFile"
 
 copyParams $configIniFile leftOffsetsMatrix rightOffsetsMatrix configIniMatrix 
+
+sleep 3
+
+demoRedBall --from $configIniFile &
 
 echo " "
 echo "Script completed successfully..."
