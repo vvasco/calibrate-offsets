@@ -289,7 +289,7 @@ public:
     }
 
     /********************************************************/
-    bool writeToFile() override
+    bool writeToFile()
     {
         if (!calibrate_left && !calibrate_right)
         {
@@ -715,6 +715,12 @@ public:
     bool calibrate(const std::string &part) override
     {
         return processing->calibrate(part);
+    }
+
+    /**********************************************************/
+    bool writeToFile() override
+    {
+        return processing->writeToFile();
     }
 
     /**********************************************************/
