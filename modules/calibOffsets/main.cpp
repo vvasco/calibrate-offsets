@@ -291,7 +291,8 @@ public:
     /********************************************************/
     bool writeToFile()
     {
-        if (!calibrate_left && !calibrate_right)
+        // for now we check require both arm to be calibrated
+        if (!calibrate_left || !calibrate_right)
         {
             yInfo() << "Left / right arm not yet calibrated";
             return false;
