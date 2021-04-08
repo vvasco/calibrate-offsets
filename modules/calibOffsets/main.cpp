@@ -56,6 +56,8 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     double ballLikelihoodThresh;
     int filterOrder;
     int countOffset;
+    double xOffset;
+    double ballRadius;
     yarp::os::ResourceFinder rf;
 
     yarp::os::BufferedPort<yarp::os::Bottle > trackerInPort;
@@ -89,7 +91,9 @@ public:
                 yarp::os::Bottle *cl, yarp::os::Bottle *cr,
                 yarp::os::Bottle *homep, yarp::os::Bottle *homev,
                 const double &skinPressureThresh, const int &activeTaxelsThresh,
-                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition, yarp::os::Bottle *calibRightPosition, const int filterOrder, yarp::os::ResourceFinder &rf)
+                const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition,
+                yarp::os::Bottle *calibRightPosition, const int filterOrder,
+                const double &xOffset, const double &ballRadius, yarp::os::ResourceFinder &rf)
     {   
         this->rf=rf;
         this->moduleName = moduleName;
@@ -171,6 +175,8 @@ public:
         this->activeTaxelsThresh = activeTaxelsThresh;
         this->ballLikelihoodThresh = ballLikelihoodThresh;
         this->filterOrder = filterOrder;
+        this->xOffset = xOffset;
+        this->ballRadius = ballRadius;
      
     }
 
@@ -297,32 +303,31 @@ public:
             yInfo() << "Left / right arm not yet calibrated";
             return false;
         }
-        double x_offset = 0.01;
-        double ball_radius = 0.03;
+
         std::string path = rf.getHomeContextPath().c_str();
         std::ofstream oFile( path + "/calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
         if (oFile.is_open())
         {
             // LEFT_ARM
-             if (calibrate_left){
-		    oFile << "[left_arm]" << "\n";
-		    oFile << "reach_offset" << "\t" ;
-		    oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - 2*ball_radius << " " << filteredOffsetLeft[2];
-		    oFile <<  "\n";
-		    oFile << "grasp_offset" << "\t" ;
-		    oFile << filteredOffsetLeft[0] + x_offset << " " << filteredOffsetLeft[1] - 2*ball_radius << " " << filteredOffsetLeft[2];
-		    oFile <<  "\n";
-	     }
+            if (calibrate_left){
+                oFile << "[left_arm]" << "\n";
+                oFile << "reach_offset" << "\t" ;
+                oFile << filteredOffsetLeft[0] + xOffset << " " << filteredOffsetLeft[1] - 2*ballRadius << " " << filteredOffsetLeft[2];
+                oFile <<  "\n";
+                oFile << "grasp_offset" << "\t" ;
+                oFile << filteredOffsetLeft[0] + xOffset << " " << filteredOffsetLeft[1] << " " << filteredOffsetLeft[2];
+                oFile <<  "\n";
+            }
             // RIGHT_ARM
-             if (calibrate_right){
-		    oFile << "[right_arm]" << "\n";
-		    oFile << "reach_offset" << "\t" ;
-		    oFile <<  filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + 2*ball_radius << " " << filteredOffsetRight[2];
-		    oFile <<  "\n";
-		    oFile << "grasp_offset" << "\t" ;
-		    oFile << filteredOffsetRight[0] + x_offset << " " << filteredOffsetRight[1] + 2*ball_radius << " " << filteredOffsetRight[2];
-		    oFile <<  "\n";
-   	    }
+            if (calibrate_right){
+                oFile << "[right_arm]" << "\n";
+                oFile << "reach_offset" << "\t" ;
+                oFile <<  filteredOffsetRight[0] + xOffset << " " << filteredOffsetRight[1] + 2*ballRadius << " " << filteredOffsetRight[2];
+                oFile <<  "\n";
+                oFile << "grasp_offset" << "\t" ;
+                oFile << filteredOffsetRight[0] + xOffset << " " << filteredOffsetRight[1] << " " << filteredOffsetRight[2];
+                oFile <<  "\n";
+            }
             oFile.close();
             return true;
         }
@@ -687,12 +692,16 @@ public:
         int activeTaxelsThresh = rf.check("activeTaxelsThresh", yarp::os::Value(3), "threshold for palm active taxels").asInt();
         double ballLikelihoodThresh = rf.check("ballLikelihoodThresh", yarp::os::Value(0.0005), "threshold on likelihood for detecting the ball").asDouble();
         int filterOrder = rf.check("filterOrder", yarp::os::Value(20), "order of the filter").asInt();
+        double xOffset = rf.check("xOffset", yarp::os::Value(0.01), "offset to apply on the x direction [m]").asDouble();
+        double ballRadius = rf.check("ballRadius", yarp::os::Value(0.03), "ball radius [m]").asDouble();
 
         rpcPort.open(("/"+getName("/rpc")).c_str());
 
         closing = false;
         processing = new Processing( moduleName, robotName, calibLeft, calibRight, homePos, homeVels,
-                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh, calibLeftPosition, calibRightPosition, filterOrder, rf);
+                                     skinPressureThresh, activeTaxelsThresh, ballLikelihoodThresh,
+                                     calibLeftPosition, calibRightPosition, filterOrder, xOffset,
+                                     ballRadius, rf);
 
         /* now start the thread to do the work */
         processing->open();
