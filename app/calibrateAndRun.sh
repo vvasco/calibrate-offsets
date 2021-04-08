@@ -109,12 +109,16 @@ declare -A leftOffsetsMatrix
 declare -A rightOffsetsMatrix 
 declare -A configIniMatrix
 
-calibResultFile=$(yarp resource --context calibOffsets --from $1 | awk -F'"' '{print $2}' ) 
-if [ -s $calibResultFile ]
-then 
-   echo "File $calibResultFile not found"
-   exit 1 
-fi
+calibOffsets &
+
+#calibResultFile=$(yarp resource --context calibOffsets --from $1 | awk -F'"' '{print $2}' ) 
+calibResultFile=$1
+while [ ! -f $calibResultFile ]
+do
+  sleep 2 # or less like 0.2
+  echo "waiting for file ..."
+done
+
 getFileParameters $calibResultFile leftOffsetsMatrix rightOffsetsMatrix
 
 configIniFile=$(yarp resource --context demoRedBall --from config.ini | awk -F'"' '{print $2}' ) 
@@ -130,4 +134,5 @@ echo " "
 echo "Script completed successfully..."
 
 exit 0
+
 
