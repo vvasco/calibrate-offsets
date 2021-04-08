@@ -18,6 +18,7 @@ include(ICUBcontribHelpers)
 icubcontrib_set_default_prefix()
 
 add_subdirectory(modules)
+add_subdirectory(app)
 
 # generate ad-hoc project to perform "make uninstall"
 icubcontrib_add_uninstall_target()
