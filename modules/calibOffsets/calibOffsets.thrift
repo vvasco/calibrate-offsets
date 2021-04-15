@@ -39,10 +39,16 @@ service calibOffsets_IDL
     list<double> getOffset(1:string part);
 
     /**
-     * Write offsets to file.
+     * Reset calibration offsets and clear output file.
      * @return true/false on success/failure.
     */
-    bool writeToFile();
+    bool reset();
+
+    /**
+     * True if file has been written.
+     * @return true/false on success/failure.
+    */
+    bool fileWritten(1:string part);
 
 
 }
