@@ -127,7 +127,7 @@ copyParams $configIniFile leftOffsetsMatrix rightOffsetsMatrix configIniMatrix
 
 sleep 3
 
-demoRedBall --from $configIniFile &
+demoRedBall --from $configIniFile
 
 echo " "
 echo "Script completed successfully..."
