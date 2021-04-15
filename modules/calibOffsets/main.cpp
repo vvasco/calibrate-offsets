@@ -86,8 +86,7 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     std::mutex mtx,mtx_calibrated_part;
     std::condition_variable part_calibrated;
 
-    std::ofstream oFile;
-    std::string filePath;
+    std::string oLeft, oRight;
 
 public:
 
@@ -295,13 +294,8 @@ public:
             iposRight->setRefSpeed(j,homeVels[j]);
         }
         
-        filePath = rf.getHomeContextPath().c_str();
-        oFile.open(filePath + "/calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
-        if (!oFile.is_open())
-        {
-            yError() << "Could not open output file";
-            return false;
-        }
+        oLeft = "";
+        oRight = "";
 
         return true;
     }
@@ -319,35 +313,50 @@ public:
             yInfo() << "Right arm not yet calibrated";
             return false;
         }
+        if (part == "both" && !calibrate_right || !calibrate_left)
+        {
+            yInfo() << "Left / right arm not yet calibrated";
+            return false;
+        }
 
+        std::string filePath = rf.getHomeContextPath().c_str();
+        std::ofstream oFile(filePath + "/calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
         if (oFile.is_open())
         {
             // LEFT_ARM
-            if (part == "left" && calibrate_left)
+            if (calibrate_left)
             {
-                oFile << "[left_arm]" << "\n";
-                oFile << "reach_offset" << "\t" ;
-                oFile << filteredOffsetLeft[0] + xOffset << " " << filteredOffsetLeft[1] - 2*ballRadius << " " << filteredOffsetLeft[2];
-                oFile <<  "\n";
-                oFile << "grasp_offset" << "\t" ;
-                oFile << filteredOffsetLeft[0] + xOffset << " " << filteredOffsetLeft[1] << " " << filteredOffsetLeft[2];
-                oFile <<  "\n";
-                oFile.flush(); //to write the file before close() is called
-                yInfo() << "Written" << part << "to" << filePath + "/calibOffsetsResults.txt";
+                oLeft = "[left_arm] \n";
+                oLeft += "reach_offset \t" ;
+                oLeft += std::to_string(filteredOffsetLeft[0] + xOffset) + " " +
+                        std::to_string(filteredOffsetLeft[1] - 2*ballRadius) + " " +
+                        std::to_string(filteredOffsetLeft[2]);
+                oLeft += "\n";
+                oLeft += "grasp_offset \t" ;
+                oLeft += std::to_string(filteredOffsetLeft[0] + xOffset) + " " +
+                        std::to_string(filteredOffsetLeft[1]) + " " +
+                        std::to_string(filteredOffsetLeft[2]);
+                oLeft += "\n";
             }
             // RIGHT_ARM
-            if (part == "right" && calibrate_right)
+            if (calibrate_right)
             {
-                oFile << "[right_arm]" << "\n";
-                oFile << "reach_offset" << "\t" ;
-                oFile <<  filteredOffsetRight[0] + xOffset << " " << filteredOffsetRight[1] + 2*ballRadius << " " << filteredOffsetRight[2];
-                oFile <<  "\n";
-                oFile << "grasp_offset" << "\t" ;
-                oFile << filteredOffsetRight[0] + xOffset << " " << filteredOffsetRight[1] << " " << filteredOffsetRight[2];
-                oFile <<  "\n";
-                oFile.flush();
-                yInfo() << "Written" << part << "to" << filePath + "/calibOffsetsResults.txt";
+                oRight = "[right_arm] \n";
+                oRight += "reach_offset \t" ;
+                oRight += std::to_string(filteredOffsetRight[0] + xOffset) + " "
+                        + std::to_string(filteredOffsetRight[1] + 2*ballRadius) + " "
+                        + std::to_string(filteredOffsetRight[2]);
+                oRight += "\n";
+                oRight += "grasp_offset \t" ;
+                oRight += std::to_string(filteredOffsetRight[0] + xOffset) + " " +
+                        std::to_string(filteredOffsetRight[1]) + " " +
+                        std::to_string(filteredOffsetRight[2]);
+                oRight += "\n";
             }
+            oFile << oLeft << "\n";
+            oFile << oRight;
+            oFile.close();
+            yInfo() << "Written" << part << "to" << filePath + "/calibOffsetsResults.txt";
             return true;
         }
         else
@@ -366,8 +375,6 @@ public:
     {
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
-
-        oFile.close();
 
         if (drvCartLeftArm)
         {
@@ -421,8 +428,11 @@ public:
                 }
                 else if (part == "right")
                 {
-                    ok_to_go = bodyPart->get(1).asInt() == 4 && bodyPart->get(2).asInt() == 6
-                            && bodyPart->get(3).asInt() == 4;
+                    //REMEMBER THIS!!!!!!!!!!!!!!!!!!!!!!!!
+                    ok_to_go = bodyPart->get(1).asInt() == 3 && bodyPart->get(2).asInt() == 6
+                            && bodyPart->get(3).asInt() == 1;
+//                    ok_to_go = bodyPart->get(1).asInt() == 4 && bodyPart->get(2).asInt() == 6
+//                            && bodyPart->get(3).asInt() == 4;
                 }
                 else
                 {
@@ -547,13 +557,13 @@ public:
         calibrating = false;
         calibrate_left = false;
         calibrate_right = false;
-        oFile.close();
-        oFile.open(filePath + "/calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
-        if (!oFile.is_open())
-        {
-            yError() << "Could not open output file";
-            return false;
-        }
+//        oFile.close();
+//        oFile.open(filePath + "/calibOffsetsResults.txt", std::ios_base::out | std::ios_base::trunc);
+//        if (!oFile.is_open())
+//        {
+//            yError() << "Could not open output file";
+//            return false;
+//        }
         return true;
     }
 
@@ -566,14 +576,15 @@ public:
             if (calibrate(part, timeout))
             {
                 yInfo() << "Calibrated" << part << " / timeout expired";
-                if (writeToFile(part))
-                {
-                    return true;
-                }
-                else
-                {
-                    yError() << "File not written";
-                }
+                return true;
+//                if (writeToFile(part))
+//                {
+//                    return true;
+//                }
+//                else
+//                {
+//                    yError() << "File not written";
+//                }
             }
             else
             {
@@ -585,24 +596,6 @@ public:
             yError() << "Could not look at" << part;
         }
         return false;
-    }
-
-    /**********************************************************/
-    bool fileWritten(const std::string part)
-    {
-        std::lock_guard<std::mutex> lg(mtx);
-        if (part == "left")
-        {
-            return calibrate_left;
-        }
-        if (part == "right")
-        {
-            return calibrate_right;
-        }
-        if (part == "both")
-        {
-            return calibrate_left && calibrate_right;
-        }
     }
 
     /**********************************************************/
@@ -826,22 +819,16 @@ public:
         return processing->lookAndCalibrate(part, timeout);
     }
 
-//    /**********************************************************/
-//    bool writeToFile(const std::string &part) override
-//    {
-//        return processing->writeToFile(part);
-//    }
+    /**********************************************************/
+    bool writeToFile(const std::string &part) override
+    {
+        return processing->writeToFile(part);
+    }
 
     /**********************************************************/
     bool reset() override
     {
         return processing->reset();
-    }
-
-    /**********************************************************/
-    bool fileWritten(const std::string &part) override
-    {
-        return processing->fileWritten(part);
     }
 
     /**********************************************************/

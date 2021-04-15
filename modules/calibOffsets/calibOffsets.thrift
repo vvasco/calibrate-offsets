@@ -46,9 +46,10 @@ service calibOffsets_IDL
 
     /**
      * True if file has been written.
+     * @param part to be saved in the output file (left / right / both).
      * @return true/false on success/failure.
     */
-    bool fileWritten(1:string part);
+    bool writeToFile(1:string part);
 
 
 }
