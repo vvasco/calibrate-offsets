@@ -40,6 +40,7 @@
 #include <string>
 #include <fstream>
 #include <algorithm>
+#include <condition_variable>
 
 #include "calibOffsets_IDL.h"
 
@@ -82,7 +83,8 @@ class Processing : public yarp::os::BufferedPort<yarp::os::Bottle >
     yarp::dev::ICartesianControl *icartRight;
     yarp::dev::IGazeControl *igaze;
 
-    std::mutex mtx;
+    std::mutex mtx,mtx_calibrated_part;
+    std::condition_variable part_calibrated;
 
 public:
 
@@ -94,7 +96,7 @@ public:
                 const double &ballLikelihoodThresh, yarp::os::Bottle *calibLeftPosition,
                 yarp::os::Bottle *calibRightPosition, const int filterOrder,
                 const double &xOffset, const double &ballRadius, yarp::os::ResourceFinder &rf)
-    {   
+    {
         this->rf=rf;
         this->moduleName = moduleName;
         this->robotName = robotName;
@@ -177,7 +179,7 @@ public:
         this->filterOrder = filterOrder;
         this->xOffset = xOffset;
         this->ballRadius = ballRadius;
-     
+
     }
 
     /********************************************************/
@@ -209,7 +211,7 @@ public:
         countOffset = 0;
         filteredOffsetLeft = yarp::sig::Vector(3,0.0);
         filteredOffsetRight = yarp::sig::Vector(3,0.0);
-	
+
         // CARTESIAN LEFT
         yarp::os::Property optCartLeftArm("(device cartesiancontrollerclient)");
         optCartLeftArm.put("remote", "/" + robotName + "/cartesianController/left_arm");
@@ -267,7 +269,7 @@ public:
 
         if (drvCartLeftArm->isValid() && drvGaze->isValid() && drvRightArm->isValid()
                 && drvLeftArm->isValid() && drvRightArm->isValid())
-        {            
+        {
             drvLeftArm->view(iposLeft);
             drvLeftArm->view(imodeLeft);
             drvRightArm->view(iposRight);
@@ -345,7 +347,7 @@ public:
 
     /********************************************************/
     void close()
-    {   
+    {
         BufferedPort<yarp::os::Bottle >::close();
         trackerInPort.close();
         
@@ -369,7 +371,7 @@ public:
         if (drvGaze)
         {
             delete drvGaze;
-        }   
+        }
         if (offsetFilter)
         {
             delete offsetFilter;
@@ -386,10 +388,8 @@ public:
 
     /********************************************************/
     void onRead( yarp::os::Bottle &inSkin )
-    {   
-        
+    {
         std::lock_guard<std::mutex> lg(mtx);
-        
         for (int j=0; j < inSkin.size(); j++)
         {
             yarp::os::Bottle *subSkin = inSkin.get(j).asList();
@@ -403,42 +403,40 @@ public:
                             && bodyPart->get(3).asInt() == 1;
                 }
                 else if (part == "right")
-                {   
+                {
                     ok_to_go = bodyPart->get(1).asInt() == 4 && bodyPart->get(2).asInt() == 6
-                           && bodyPart->get(3).asInt() == 4;
+                            && bodyPart->get(3).asInt() == 4;
                 }
                 else
                 {
-                    yInfo() << "Not handled";
+                    yInfo() << "Part not handled";
                 }
-//                bool ok_to_go = true;
-
                 if (ok_to_go && calibrating)
-                {    
+                {
+                    yInfo() << "Starting calibration";
                     double avgPressure = subSkin->get(7).asDouble();
                     if (avgPressure >= skinPressureThresh)
-                    {   
+                    {
                         yarp::os::Bottle *activeTaxels = subSkin->get(6).asList();
                         int countActive = 0;
                         for (int i = 0; i < activeTaxels->size(); i++)
                         {
                             int ai = activeTaxels->get(i).asInt();
                             if(std::count(allowedTaxels.begin(), allowedTaxels.end(), ai))//if (ai >= 97 && ai <= 144)
-                            {   
+                            {
                                 countActive++;
                             }
                         }
                         yInfo() << "Found" << countActive << "palm active taxels";
 
-//                        int countActive = 4;
+                        //                        int countActive = 4;
                         if (countActive >= activeTaxelsThresh)
                         {
                             yarp::os::Bottle *ballPos = trackerInPort.read();
                             if (ballPos->size() > 0)
                             {
                                 if (ballPos->get(3).asDouble() > ballLikelihoodThresh)
-                                {   
-    
+                                {
                                     yarp::sig::Vector xEye, oEye;
                                     igaze->getLeftEyePose(xEye, oEye);
                                     yarp::sig::Matrix eye2root = yarp::math::axis2dcm(oEye);
@@ -456,43 +454,46 @@ public:
 
                                     yarp::sig::Vector xHand;
                                     yarp::sig::Vector oHand;
-                                     if (part == "left")
-                                    {  
-                                         icartLeft->getPose(xHand, oHand);
+                                    if (part == "left")
+                                    {
+                                        icartLeft->getPose(xHand, oHand);
                                     }
-                                     if (part == "right")
-                                    {  
+                                    if (part == "right")
+                                    {
                                         icartRight->getPose(xHand, oHand);
                                     }
                                     yDebug() << "Hand Effector" << xHand.toString();
 
-                
+
                                     offset[0] = xHand[0] - posBallRoot[0];
                                     offset[1] = xHand[1] - posBallRoot[1];
                                     offset[2] = xHand[2] - posBallRoot[2];
                                     yDebug() << "Offset" << offset[0] << offset[1] << offset[2];
                                     countOffset++;
-                                                                        
+
                                     if (part == "left")
                                     {
                                         filteredOffsetLeft=offsetFilter->filt(offset);
-                                        calibrate_left = true;
                                     }
                                     else if (part == "right")
                                     {
                                         filteredOffsetRight=offsetFilter->filt(offset);
-                                        calibrate_right = true;
                                     }
-                                    if(countOffset > filterOrder){                    
-                                       if (part == "left")
+                                    if(countOffset > filterOrder)
+                                    {
+                                        if (part == "left")
                                         {
-                                           yDebug() << "Filtered offset left" << filteredOffsetLeft.toString();
+                                            yDebug() << "Filtered offset left" << filteredOffsetLeft.toString();
+                                            calibrate_left = true;
+                                            part_calibrated.notify_all();
                                         }
                                         else if (part == "right")
                                         {
                                             yDebug() << "Filtered offset right" << filteredOffsetRight.toString();
+                                            calibrate_right = true;
+                                            part_calibrated.notify_all();
                                         }
-                                       calibrating = false;
+                                        calibrating = false;
                                     }
                                 }
                             }
@@ -518,14 +519,47 @@ public:
             tmpOffset[1] = filteredOffsetRight[1];
             tmpOffset[2] = filteredOffsetRight[2];
         }
-       
+
         return tmpOffset;
     }
 
     /**********************************************************/
-    bool calibrate(const std::string part)
+    bool lookAndCalibrate(const std::string part, const int timeout)
+    {
+        yInfo() << "Trying to look at" << part;
+        if (look(part, timeout))
+        {
+            if (calibrate(part, timeout))
+            {
+                yInfo() << "Calibrated" << part << " / timeout expired";
+                return true;
+            }
+            else
+            {
+                yError() << "Could not calibrate" << part;
+            }
+        }
+        else
+        {
+            yError() << "Could not look at" << part;
+        }
+        return false;
+    }
+
+    /**********************************************************/
+    bool calibrate(const std::string part, const int timeout)
+    {
+        std::unique_lock<std::mutex> lck(mtx_calibrated_part);
+        yInfo() << "Waiting" << part << "to be calibrated";
+        part_calibrated.wait_for(lck,std::chrono::seconds(timeout));
+        return true;
+    }
+
+    /**********************************************************/
+    bool look(const std::string part, const int timeout)
     {
         std::lock_guard<std::mutex> lg(mtx);
+        yInfo() << "Starting looking at" << part;
         countOffset = 0;
         this->part = part;
         yarp::sig::Vector xd(3);
@@ -566,8 +600,7 @@ public:
                 iposRight->positionMove(j,calibRightPos[j]);
             }
         }
-        
-    
+
         //if (!icart->goToPoseSync(xd, od))
         //{
         //   yError() << part << "arm could not reach" << xd.toString();
@@ -577,18 +610,24 @@ public:
         
         yarp::sig::Vector x0,o0;
         bool done = false;
-        
-        while (done==false){
-            if (part == "left") 
+        double t0 = yarp::os::Time::now();
+        while (done==false)
+        {
+            if (part == "left")
             {
                 iposLeft->checkMotionDone(&done);
-            } 
-            else if (part == "right") 
+            }
+            else if (part == "right")
             {
                 iposRight->checkMotionDone(&done);
             }
             yarp::os::Time::delay(0.1);
-            yInfo() << "Done" << done;
+            if ((yarp::os::Time::now() - t0) > timeout)
+            {
+                yWarning() << "Timeout expired";
+                break;
+            }
+
         }
         icart->getPose(x0,o0);
 
@@ -598,6 +637,7 @@ public:
             return false;
         }
         igaze->waitMotionDone(0.001, 5.0);
+        yInfo() << "Looking at" << part;
 
         calibrating = true;
         return true;
@@ -673,13 +713,13 @@ public:
             yError() << "Could not find homePos or homeVels";
             return false;
         }
-       
+
         if (!rf.check("calibLeftPosition") || !rf.check("calibRightPosition"))
         {
             yError() << "Could not find calibLeftPosition or calibRightPosition";
             return false;
         }
-   
+
         yarp::os::Bottle *calibLeft=rf.find("calibLeft").asList();
         yarp::os::Bottle *calibRight=rf.find("calibRight").asList();
         yarp::os::Bottle *homePos=rf.find("homePos").asList();
@@ -713,7 +753,7 @@ public:
 
     /**********************************************************/
     bool close()
-    {   
+    {
         rpcPort.close();
         processing->interrupt();
         processing->close();
@@ -722,9 +762,9 @@ public:
     }
 
     /**********************************************************/
-    bool calibrate(const std::string &part) override
+    bool lookAndCalibrate(const std::string &part, const int timeout) override
     {
-        return processing->calibrate(part);
+        return processing->lookAndCalibrate(part, timeout);
     }
 
     /**********************************************************/

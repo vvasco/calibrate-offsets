@@ -18,11 +18,12 @@ service calibOffsets_IDL
     bool quit();
 
     /**
-     * Calibrate arm.
+     * Look at arm and calibrate.
      * @param part to calibrate.
+     * @param timeout in seconds (default 30 s).
      * @return true/false on success/failure
     */
-    bool calibrate(1:string part);
+    bool lookAndCalibrate(1:string part, 2:i32 timeout=30);
 
     /**
      * Home arms and gaze.
