@@ -428,11 +428,8 @@ public:
                 }
                 else if (part == "right")
                 {
-                    //REMEMBER THIS!!!!!!!!!!!!!!!!!!!!!!!!
-                    ok_to_go = bodyPart->get(1).asInt() == 3 && bodyPart->get(2).asInt() == 6
-                            && bodyPart->get(3).asInt() == 1;
-//                    ok_to_go = bodyPart->get(1).asInt() == 4 && bodyPart->get(2).asInt() == 6
-//                            && bodyPart->get(3).asInt() == 4;
+                    ok_to_go = bodyPart->get(1).asInt() == 4 && bodyPart->get(2).asInt() == 6
+                            && bodyPart->get(3).asInt() == 4;
                 }
                 else
                 {
