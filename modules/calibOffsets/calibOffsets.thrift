@@ -20,10 +20,10 @@ service calibOffsets_IDL
     /**
      * Look at arm and calibrate.
      * @param part to calibrate.
-     * @param timeout in seconds (default 30 s).
+     * @param timeout in seconds (default 120 s).
      * @return true/false on success/failure
     */
-    bool lookAndCalibrate(1:string part, 2:i32 timeout=30);
+    bool lookAndCalibrate(1:string part, 2:i32 timeout=120);
 
     /**
      * Home arms and gaze.
