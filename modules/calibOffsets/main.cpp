@@ -129,7 +129,7 @@ public:
 
         if (homep->size() > 0)
         {
-            homePos.resize(7);
+            homePos.resize(9);
             homePos[0] = homep->get(0).asDouble();
             homePos[1] = homep->get(1).asDouble();
             homePos[2] = homep->get(2).asDouble();
@@ -137,11 +137,13 @@ public:
             homePos[4] = homep->get(4).asDouble();
             homePos[5] = homep->get(5).asDouble();
             homePos[6] = homep->get(6).asDouble();
+            homePos[7] = homep->get(7).asDouble();
+            homePos[8] = homep->get(8).asDouble();
         }
 
         if (homev->size() > 0)
         {
-            homeVels.resize(7);
+            homeVels.resize(9);
             homeVels[0] = homev->get(0).asDouble();
             homeVels[1] = homev->get(1).asDouble();
             homeVels[2] = homev->get(2).asDouble();
@@ -149,11 +151,13 @@ public:
             homeVels[4] = homev->get(4).asDouble();
             homeVels[5] = homev->get(5).asDouble();
             homeVels[6] = homev->get(6).asDouble();
+            homeVels[7] = homev->get(7).asDouble();
+            homeVels[8] = homev->get(8).asDouble();
         }
         
         if (calibLeftPosition->size() > 0)
         {
-            calibLeftPos.resize(7);
+            calibLeftPos.resize(9);
             calibLeftPos[0] = calibLeftPosition->get(0).asDouble();
             calibLeftPos[1] = calibLeftPosition->get(1).asDouble();
             calibLeftPos[2] = calibLeftPosition->get(2).asDouble();
@@ -161,11 +165,13 @@ public:
             calibLeftPos[4] = calibLeftPosition->get(4).asDouble();
             calibLeftPos[5] = calibLeftPosition->get(5).asDouble();
             calibLeftPos[6] = calibLeftPosition->get(6).asDouble();
+            calibLeftPos[7] = calibLeftPosition->get(7).asDouble();
+            calibLeftPos[8] = calibLeftPosition->get(8).asDouble();
         }
 
         if (calibRightPosition->size() > 0)
         {
-            calibRightPos.resize(7);
+            calibRightPos.resize(9);
             calibRightPos[0] = calibRightPosition->get(0).asDouble();
             calibRightPos[1] = calibRightPosition->get(1).asDouble();
             calibRightPos[2] = calibRightPosition->get(2).asDouble();
@@ -173,6 +179,8 @@ public:
             calibRightPos[4] = calibRightPosition->get(4).asDouble();
             calibRightPos[5] = calibRightPosition->get(5).asDouble();
             calibRightPos[6] = calibRightPosition->get(6).asDouble();
+            calibRightPos[7] = calibRightPosition->get(7).asDouble();
+            calibRightPos[8] = calibRightPosition->get(8).asDouble();
         }
 
         this->skinPressureThresh = skinPressureThresh;
